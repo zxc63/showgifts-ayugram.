@@ -1,0 +1,89 @@
+__id__ = "gift_visibility"
+__name__ = "Gift Visibility"
+__description__ = "Скрывает/показывает все подарки в профиле командами .gifts hide / .gifts show"
+__author__ = "@delamorze"
+__version__ = "1.0.1"
+__min_version__ = "12.8.1"
+__icon__ = "exteraPlugins/1"
+
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from client_utils import send_request, run_on_queue
+from android_utils import log, run_on_ui_thread
+from ui.bulletin import BulletinHelper
+
+from org.telegram.tgnet import TLRPC
+from org.telegram.tgnet.tl import TL_stars
+
+
+class GiftVisibilityPlugin(BasePlugin):
+
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+        log("[GiftVisibility] loaded")
+
+    # ---------- команды ----------
+
+    def on_send_message_hook(self, account, params):
+        msg = getattr(params, "message", None)
+        if not isinstance(msg, str):
+            return HookResult()
+
+        cmd = msg.strip().lower()
+        if cmd == ".gifts hide":
+            run_on_queue(lambda: self._process_all(unsave=True))
+        elif cmd == ".gifts show":
+            run_on_queue(lambda: self._process_all(unsave=False))
+        else:
+            return HookResult()
+
+        # не отправляем команду
+        return HookResult(strategy=HookStrategy.CANCEL)
+
+
+    def _process_all(self, unsave: bool, offset: str = "", done: int = 0):
+        req = TL_stars.getSavedStarGifts()
+        req.peer = TLRPC.TL_inputPeerSelf()
+        req.offset = offset
+        req.limit = 100
+
+        def on_list(response, error):
+            if error:
+                self._toast(f"Ошибка списка: {error.text}")
+                return
+            if response is None:
+                self._toast("Пустой ответ от сервера")
+                return
+
+            gifts = response.gifts
+            count = done
+
+            for i in range(gifts.size()):
+                g = gifts.get(i)
+                already_hidden = bool(getattr(g, "unsaved", False))
+                if already_hidden == unsave:
+                    continue
+
+                save = TL_stars.saveStarGift()
+                inp = TL_stars.TL_inputSavedStarGiftUser()
+                inp.msg_id = g.msg_id
+                save.stargift = inp
+                save.unsave = unsave
+                send_request(save, self._on_toggle)
+                count += 1
+
+            next_offset = getattr(response, "next_offset", None)
+            if next_offset:
+                # следующая страница
+                self._process_all(unsave, next_offset, count)
+            else:
+                action = "скрыто" if unsave else "показано"
+                self._toast(f"Готово: {action} подарков — {count}")
+
+        send_request(req, on_list)
+
+    def _on_toggle(self, response, error):
+        if error:
+            log(f"[GiftVisibility] toggle error: {error.text}")
+
+    def _toast(self, text: str):
+        run_on_ui_thread(lambda: BulletinHelper.show_info(text))
