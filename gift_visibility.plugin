@@ -21,7 +21,7 @@ class GiftVisibilityPlugin(BasePlugin):
         self.add_on_send_message_hook()
         log("[GiftVisibility] loaded")
 
-    # ---------- команды ----------
+    #  команды 
 
     def on_send_message_hook(self, account, params):
         msg = getattr(params, "message", None)
